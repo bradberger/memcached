@@ -72,7 +72,11 @@ func TestAdd(t *testing.T) {
 }
 
 func TestReplace(t *testing.T) {
-	assert.NoError(t, c.Replace(&memcache.Item{Key: "foo", Value: []byte("bar")}))
+
+	itm := memcache.Item{Key: "foo", Value: []byte("bar")}
+	assert.NoError(t, c.Replace(&itm))
+	assert.NoError(t, c.Delete("foo"))
+	assert.Equal(t, memcache.ErrNotStored, c.Replace(&itm))
 }
 
 func TestAppend(t *testing.T) {
@@ -96,19 +100,39 @@ func TestDeleteAll(t *testing.T) {
 }
 
 func TestIncrement(t *testing.T) {
+
+	// Set initial value.
+	assert.NoError(t, c.Delete("foo"))
 	assert.NoError(t, c.Set(&memcache.Item{Key: "foo", Value: []byte("1")}))
+
+	// Check increment response.
 	delta, err := c.Increment("foo", 1)
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(2), delta)
-	assert.NoError(t, c.Delete("foo"))
+
+	// Check get after increment
+	itm, err := c.Get("foo")
+	if assert.NoError(t, err) {
+		assert.NotNil(t, itm)
+		assert.Equal(t, []byte("2"), itm.Value)
+	}
 }
 
 func TestDecrement(t *testing.T) {
+
+	// Set up initial value.
 	assert.NoError(t, c.Delete("foo"))
 	assert.NoError(t, c.Set(&memcache.Item{Key: "foo", Value: []byte("100")}))
+
+	// Check the decrement response
 	delta, err := c.Decrement("foo", 1)
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(99), delta)
+
+	// Check get matches the value just returned
+	itm, err := c.Get("foo")
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("99"), itm.Value)
 }
 
 func TestCompareAndSwap(t *testing.T) {

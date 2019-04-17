@@ -53,10 +53,14 @@ func main() {
 
 ## TODO
 
-- [ ] `increment` command support
-- [ ] `decrement` command support
-- [ ] `touch` command support
+- [X] `increment` command support
+- [X] `decrement` command support
+- [X] `touch` command support
+- [-] `append` command support
+- [-] `prepend` command support
 - [ ] `gat` command support
 - [ ] `gats` command support
 - [ ] `cas` command support
 - [ ] UDP support
+- [ ] Binary protocol support
+- [X] handle `noreply` properly

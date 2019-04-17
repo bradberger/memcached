@@ -24,16 +24,9 @@ func (s *session) serve() {
 
 	defer s.rwc.Close()
 
-	defer func() {
-		if r := recover(); r != nil {
-			s.srv.Logger.Errorf("Panic: %v", r)
-			s.sendservererror(fmt.Errorf("%v", r))
-		}
-	}()
-
 	for {
 
-		sl, err := s.br.ReadSlice('\n')
+		cmdName, err := s.br.ReadString(' ')
 		if err != nil {
 			if err == io.EOF {
 				s.rwc.Close()
@@ -44,8 +37,8 @@ func (s *session) serve() {
 			return
 		}
 
-		cmd := command(strings.TrimSpace(string(sl)))
-		if err := cmd.Error(); err != nil {
+		cmd, err := parseCmd(strings.TrimSpace(cmdName), s.br)
+		if err != nil {
 			s.sendservererror(err)
 			continue
 		}
@@ -91,14 +84,16 @@ func (s *session) sendservererror(e error) {
 		s.sendlinef("NOT_FOUND")
 	case ErrUnknownCommand:
 		s.sendlinef("ERROR")
+	case ErrInvalidCommand:
+		s.sendlinef("CLIENT_ERROR %v", e)
 	default:
 		s.sendlinef("SERVER_ERROR %v", e)
 	}
 }
 
-func (s *session) getItem(cmd command) (*item, error) {
+func (s *session) getItem(cmd *command) (*item, error) {
 
-	buf := make([]byte, cmd.Bytes())
+	buf := make([]byte, cmd.byteLen)
 	if _, err := io.ReadFull(s.br, buf); err != nil {
 		return nil, err
 	}
@@ -108,13 +103,13 @@ func (s *session) getItem(cmd command) (*item, error) {
 	}
 
 	return &item{
-		key:   cmd.Key()[0],
+		key:   cmd.key,
 		value: buf,
-		exp:   getExpiration(cmd.Exp()),
+		exp:   getExpiration(cmd.exptime),
 	}, nil
 }
 
-func (s *session) handleSet(cmd command) {
+func (s *session) handleSet(cmd *command) {
 
 	// Read the value
 	val, err := s.getItem(cmd)
@@ -128,10 +123,14 @@ func (s *session) handleSet(cmd command) {
 		return
 	}
 
+	if cmd.noReply {
+		return
+	}
+
 	s.sendlinef("STORED")
 }
 
-func (s *session) handleAdd(cmd command) {
+func (s *session) handleAdd(cmd *command) {
 	a, ok := s.srv.Cache.(cache.Add)
 	if !ok {
 		s.sendservererror(ErrNotImplemented)
@@ -149,11 +148,35 @@ func (s *session) handleAdd(cmd command) {
 		return
 	}
 
-	s.sendlinef("STORED")
+	if cmd.noReply {
+		return
+	}
 
+	s.sendlinef("STORED")
 }
 
-func (s *session) handleReplace(cmd command) {
+func (s *session) handleTouch(cmd *command) {
+
+	t, ok := s.srv.Cache.(cache.Touch)
+	if !ok {
+		s.sendservererror(ErrNotImplemented)
+		return
+	}
+
+	val, err := s.getItem(cmd)
+	if err != nil {
+		s.sendservererror(err)
+		return
+	}
+
+	if err := t.Touch(val.key, val.expires()); err != nil {
+		s.sendservererror(err)
+		return
+	}
+}
+
+func (s *session) handleReplace(cmd *command) {
+
 	rp, ok := s.srv.Cache.(cache.Replace)
 	if !ok {
 		s.sendservererror(ErrNotImplemented)
@@ -167,29 +190,26 @@ func (s *session) handleReplace(cmd command) {
 	}
 
 	if err := rp.Replace(val.key, val); err != nil {
-		if err == cache.ErrNotStored {
-			s.sendlinef("NOT_STORED")
-			return
-		}
 		s.sendservererror(err)
 		return
 	}
 
-	s.sendlinef("STORED")
+	if cmd.noReply {
+		return
+	}
 
+	s.sendlinef("STORED")
 }
 
-func (s *session) handleAppend(cmd command) {
+func (s *session) handleAppend(cmd *command) {
 
-	key := cmd.Key()[0]
-
-	if !s.srv.Cache.Exists(key) {
+	if !s.srv.Cache.Exists(cmd.key) {
 		s.sendservererror(cache.ErrNotStored)
 		return
 	}
 
 	itm := item{}
-	if err := s.srv.Cache.Get(key, &itm); err != nil {
+	if err := s.srv.Cache.Get(cmd.key, &itm); err != nil {
 		s.sendservererror(err)
 		return
 	}
@@ -208,19 +228,22 @@ func (s *session) handleAppend(cmd command) {
 		return
 	}
 
+	if cmd.noReply {
+		return
+	}
+
 	s.sendlinef("STORED")
 }
 
-func (s *session) handlePrepend(cmd command) {
-	key := cmd.Key()[0]
+func (s *session) handlePrepend(cmd *command) {
 
-	if !s.srv.Cache.Exists(key) {
+	if !s.srv.Cache.Exists(cmd.key) {
 		s.sendservererror(cache.ErrKeyExists)
 		return
 	}
 
 	itm := item{}
-	if err := s.srv.Cache.Get(key, &itm); err != nil {
+	if err := s.srv.Cache.Get(cmd.key, &itm); err != nil {
 		s.sendservererror(err)
 		return
 	}
@@ -239,13 +262,19 @@ func (s *session) handlePrepend(cmd command) {
 		return
 	}
 
-	s.sendlinef("STORED")
+	if cmd.noReply {
+		return
+	}
 
+	s.sendlinef("STORED")
 }
 
-func (s *session) handleDelete(cmd command) {
-	key := cmd.Key()[0]
-	if err := s.srv.Cache.Del(key); err != nil {
+func (s *session) sendsuccess(cmd *command) {
+}
+
+func (s *session) handleDelete(cmd *command) {
+
+	if err := s.srv.Cache.Del(cmd.key); err != nil {
 		s.sendservererror(err)
 		return
 	}
@@ -253,7 +282,7 @@ func (s *session) handleDelete(cmd command) {
 	s.sendlinef("DELETED")
 }
 
-func (s *session) handleFlushAll(cmd command) {
+func (s *session) handleFlushAll(cmd *command) {
 
 	kl, ok := s.srv.Cache.(cache.KeyList)
 	if !ok {
@@ -278,15 +307,14 @@ func (s *session) handleFlushAll(cmd command) {
 
 }
 
-func (s *session) handleGet(cmd command) {
+func (s *session) handleGet(cmd *command) {
 	var mux sync.Mutex
 	var wg sync.WaitGroup
 
 	items := []*item{}
-	keys := cmd.Key()
-	wg.Add(len(keys))
+	wg.Add(len(cmd.keys))
 
-	for i := range keys {
+	for i := range cmd.keys {
 
 		go func(key string) {
 
@@ -305,7 +333,7 @@ func (s *session) handleGet(cmd command) {
 			items = append(items, &itm)
 			mux.Unlock()
 
-		}(keys[i])
+		}(cmd.keys[i])
 	}
 
 	wg.Wait()
@@ -313,72 +341,49 @@ func (s *session) handleGet(cmd command) {
 
 }
 
-func (s *session) handle(cmd command) {
+func (s *session) handle(cmd *command) {
 
-	// s.srv.Logger.Infof("Handling %s %+v", cmd.Name(), cmd.Key())
-
-	switch cmd.Name() {
-
+	switch cmd.name {
 	default:
 		s.sendservererror(ErrUnknownCommand)
-
 	case cmdSet:
 		s.handleSet(cmd)
-
 	case cmdAdd:
 		s.handleAdd(cmd)
-
 	case cmdReplace:
 		s.handleReplace(cmd)
-
 	case cmdAppend:
 		s.handleAppend(cmd)
-
 	case cmdPrepend:
 		s.handlePrepend(cmd)
-
 	case cmdDel:
 		s.handleDelete(cmd)
-
 	case cmdFlushAll:
 		s.handleFlushAll(cmd)
-
 	case cmdQuit:
 		s.handleQuit()
-
 	case cmdCas:
-		s.sendservererror(ErrNotImplemented)
-
+		s.handleCas(cmd)
 	case cmdIncr:
 		s.handleIncrement(cmd)
-
 	case cmdDecr:
 		s.handleDecrement(cmd)
-
 	case cmdTouch:
-		s.sendservererror(ErrNotImplemented)
-
+		s.handleTouch(cmd)
 	case cmdGat:
 		s.sendservererror(ErrNotImplemented)
-
 	case cmdGats:
 		s.sendservererror(ErrNotImplemented)
-
 	case cmdCacheMemlimit:
 		s.sendservererror(ErrNotImplemented)
-
 	case cmdVersion:
 		s.sendservererror(ErrNotImplemented)
-
 	case cmdStat:
 		s.sendservererror(ErrNotImplemented)
-
 	case cmdStats:
 		s.sendservererror(ErrNotImplemented)
-
 	case cmdGet:
 		s.handleGet(cmd)
-
 	case cmdGets:
 		s.handleGet(cmd)
 	}
@@ -388,50 +393,59 @@ func (s *session) handleQuit() {
 	s.rwc.Close()
 }
 
-func (s *session) handleIncrement(cmd command) {
-
-	delta, err := cmd.GetDelta()
-	if err != nil {
-		s.sendservererror(err)
-		return
-	}
-
-	var itm item
-	if err := s.srv.Cache.Get(cmd.Key()[0], &itm); err != nil {
-		s.sendservererror(err)
-		return
-	}
-
-	cur, err := strconv.ParseUint(string(itm.value), 10, 64)
-	if err != nil {
-		s.sendservererror(err)
-		return
-	}
-
-	// TODO store this.
-	s.sendlinef("%v", cur+delta)
+func (s *session) handleCas(cmd *command) {
+	s.sendservererror(ErrNotImplemented)
 }
 
-func (s *session) handleDecrement(cmd command) {
+func (s *session) handleIncrement(cmd *command) {
 
-	delta, err := cmd.GetDelta()
+	cur, itm, err := s.getIntVal(cmd.key)
 	if err != nil {
 		s.sendservererror(err)
 		return
 	}
 
-	var itm item
-	if err := s.srv.Cache.Get(cmd.Key()[0], &itm); err != nil {
+	val := fmt.Sprintf("%d", cur+cmd.delta)
+	itm.value = []byte(val)
+
+	if err := s.srv.Cache.Set(cmd.key, itm, itm.expires()); err != nil {
 		s.sendservererror(err)
 		return
+	}
+
+	s.sendlinef(val)
+}
+
+func (s *session) getIntVal(key string) (uint64, *item, error) {
+
+	var itm item
+	if err := s.srv.Cache.Get(key, &itm); err != nil {
+		return 0, nil, err
 	}
 
 	cur, err := strconv.ParseUint(string(itm.value), 10, 64)
 	if err != nil {
+		return 0, nil, err
+	}
+
+	return cur, &itm, nil
+}
+
+func (s *session) handleDecrement(cmd *command) {
+
+	cur, itm, err := s.getIntVal(cmd.key)
+	if err != nil {
 		s.sendservererror(err)
 		return
 	}
 
-	// TODO store this.
-	s.sendlinef("%v", cur-delta)
+	val := fmt.Sprintf("%d", cur-cmd.delta)
+	itm.value = []byte(val)
+
+	if err := s.srv.Cache.Set(itm.key, itm, itm.expires()); err != nil {
+		s.sendservererror(err)
+		return
+	}
+
+	s.sendlinef(val)
 }

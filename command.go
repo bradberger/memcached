@@ -1,41 +1,45 @@
 package memcached
 
 import (
-	"strconv"
+	"bufio"
+	"fmt"
 	"strings"
 )
 
-// todo look into using fmt.Sscanf for parsing
-type command string
-
-func (c command) String() string {
-	return strings.TrimSpace(string(c))
+type command struct {
+	keys                               []string
+	delta                              uint64
+	name, key                          string
+	flags, exptime, byteLen, casUnique int
+	noReply                            bool
 }
 
-func (c command) Error() error {
-	switch c.Name() {
-	default:
-		return ErrUnknownCommand
+func parseCmd(cmdName string, r *bufio.Reader) (cmd *command, err error) {
+
+	cmd = &command{name: cmdName}
+	ln, err := r.ReadString('\n')
+	if err != nil {
+		return
+	}
+
+	ln = strings.TrimSpace(ln)
+
+	switch cmdName {
 	case cmdGet:
 		fallthrough
 	case cmdGets:
-		if c.Len() < 2 {
-			return ErrInvalidCommand
-		}
-		return nil
+		cmd.keys = strings.Split(ln, " ")
 	case cmdDel:
-		if c.Len() != 2 {
-			return ErrInvalidCommand
-		}
-		return nil
+		cmd.noReply, err = parseLine(ln, "%s", &cmd.key)
 	case cmdFlushAll:
-		return nil
 	case cmdIncr:
-		return nil
+		fallthrough
 	case cmdDecr:
-		return nil
+		cmd.noReply, err = parseLine(ln, "%s %d", &cmd.key, &cmd.delta)
 	case cmdCas:
-		return ErrNotImplemented
+		cmd.noReply, err = parseLine(ln, "%s %d %d %d", &cmd.key, &cmd.exptime, &cmd.byteLen, &cmd.casUnique)
+	case cmdTouch:
+		cmd.noReply, err = parseLine(ln, "%s %d", &cmd.key, &cmd.exptime)
 	case cmdAppend:
 		fallthrough
 	case cmdPrepend:
@@ -45,81 +49,30 @@ func (c command) Error() error {
 	case cmdAdd:
 		fallthrough
 	case cmdSet:
-		if c.Len() < 5 || c.Len() > 6 {
-			return ErrInvalidCommand
+		cmd.noReply, err = parseLine(ln, "%s %d %d %d", &cmd.key, &cmd.flags, &cmd.exptime, &cmd.byteLen)
+	default:
+		err = ErrUnknownCommand
+	}
+
+	return
+}
+
+func isNoReply(lineFmt string, actual string) bool {
+	return strings.Count(lineFmt, " ") > strings.Count(actual, " ")
+}
+
+func parseLine(ln string, lineFmt string, vars ...interface{}) (noReply bool, err error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = ErrInvalidCommand
 		}
-		return nil
+	}()
+
+	if _, err = fmt.Sscanf(ln, lineFmt, vars...); err != nil {
+		return
 	}
-}
 
-func (c command) Parse() []string {
-	return strings.Split(c.String(), " ")
-}
-
-func (c command) Len() int {
-	return len(c.Parse())
-}
-
-func (c command) Name() string {
-	return c.Parse()[0]
-}
-
-func (c command) Key() []string {
-	if c.Len() < 2 {
-		return nil
-	}
-	switch c.Name() {
-	default:
-		return []string{c.Parse()[1]}
-	case cmdGets:
-		fallthrough
-	case cmdGet:
-		return c.Parse()[1:]
-	}
-}
-
-func (c command) Flags() int {
-	if c.Len() < 3 {
-		return 0
-	}
-	f, _ := strconv.ParseInt(c.Parse()[2], 10, 64)
-	return int(f)
-}
-
-func (c command) Exp() int {
-	if c.Len() < 4 {
-		return 0
-	}
-	b, _ := strconv.ParseInt(c.Parse()[3], 10, 64)
-	return int(b)
-}
-
-func (c command) Bytes() int {
-	if c.Len() < 5 {
-		return 0
-	}
-	b, _ := strconv.ParseInt(c.Parse()[4], 10, 64)
-	return int(b)
-}
-
-func (c command) CasUnique() int {
-	return 0
-}
-
-func (c command) NoReply() bool {
-	switch c.Name() {
-	default:
-		return c.Len() == 6
-	case cmdIncr:
-		return c.Len() == 4
-	case cmdDecr:
-		return c.Len() == 4
-	case cmdCas:
-		return c.Len() == 7
-	}
-}
-
-func (c command) GetDelta() (uint64, error) {
-	delta, err := strconv.ParseInt(c.Parse()[2], 10, 64)
-	return uint64(delta), err
+	noReply = strings.Count(ln, " ") > 3
+	return
 }
