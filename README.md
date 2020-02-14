@@ -43,7 +43,7 @@ func main() {
     Logger: logger.Init("Memcached", true, false, os.Stdout),
     // Set the listen address. Default is :11211
     Addr:   ":11211",
-	}
+  }
 
   log.Fatal(srv.ListenAndServe())
 }
