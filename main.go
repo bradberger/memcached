@@ -9,6 +9,7 @@ import (
 	"github.com/google/logger"
 )
 
+// Generic memcached errors
 var (
 	ErrNotImplemented = errors.New("not implemented")
 	ErrInvalidCommand = errors.New("invalid command")
@@ -38,12 +39,14 @@ const (
 	cmdStats         = "stats"
 )
 
-func New() *Server {
-	return &Server{
+// ListenAndServe starts a memcache server on the
+func ListenAndServe(addr string) error {
+	s := &Server{
 		Cache:  lru.NewBasic(lru.Gigabyte, 100000),
 		Logger: logger.Init("Memcached", true, false, os.Stdout),
 		Addr:   ":11211",
 	}
+	return s.ListenAndServe()
 }
 
 // getExpiration caculates the actual time of the expiration based on

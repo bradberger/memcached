@@ -3,6 +3,7 @@ package memcached
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/stretchr/testify/assert"
@@ -17,13 +18,13 @@ var (
 func TestMain(m *testing.M) {
 
 	c = memcache.New(listen)
-	s = New()
-
 	go func(s *Server) {
-		if err := s.ListenAndServe(); err != nil {
+		if err := ListenAndServe(listen); err != nil {
 			panic(err)
 		}
 	}(s)
+
+	time.Sleep(1 * time.Second)
 
 	os.Exit(m.Run())
 }

@@ -13,8 +13,7 @@ import (
 )
 
 func main() {
-  srv := memcached.New()
-  log.Fatal(srv.ListenAndServe())
+  log.Fatal(memcached.ListenAndServe(":11211"))
 }
 ```
 
@@ -38,12 +37,12 @@ func main() {
   srv := &memcached.Server{
     // Set the cache engine.
     // Must implement "github.com/bradberger/gocache/cache.Cache" interface.
-		Cache:  lru.NewBasic(lru.Gigabyte, 100000),
+    Cache:  lru.NewBasic(lru.Gigabyte, 100000),
     // Set the logger.
     // Must implement "github.com/bradberger/memcached".Logger interface.
-		Logger: logger.Init("Memcached", true, false, os.Stdout),
+    Logger: logger.Init("Memcached", true, false, os.Stdout),
     // Set the listen address. Default is :11211
-		Addr:   ":11211",
+    Addr:   ":11211",
 	}
 
   log.Fatal(srv.ListenAndServe())

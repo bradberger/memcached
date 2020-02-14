@@ -8,12 +8,15 @@ import (
 	"github.com/bradberger/gocache/cache"
 )
 
+// Server defines parameters for running a memcache server.
 type Server struct {
 	Logger Logger
 	Cache  cache.Cache
 	Addr   string
 }
 
+// ListenAndServe listens on the configured network address
+// and then calls Serve to handle memcache requests
 func (srv *Server) ListenAndServe() error {
 
 	ln, e := net.Listen("tcp", srv.Addr)
@@ -23,10 +26,11 @@ func (srv *Server) ListenAndServe() error {
 	return srv.Serve(ln)
 }
 
-func (srv *Server) Serve(ln net.Listener) error {
-	defer ln.Close()
+// Serve accepts incoming connections on the Listener l, creating a new service goroutine for each.
+func (srv *Server) Serve(l net.Listener) error {
+	defer l.Close()
 	for {
-		rw, e := ln.Accept()
+		rw, e := l.Accept()
 		if e != nil {
 			if ne, ok := e.(net.Error); ok && ne.Temporary() {
 				log.Printf("memcached: error: %v", e)
